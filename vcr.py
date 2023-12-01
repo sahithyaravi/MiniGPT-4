@@ -29,6 +29,14 @@ from minigpt4.processors import *
 from minigpt4.runners import *
 from minigpt4.tasks import *
 
+ans_options = {
+    0: 'A',
+    1: 'B',
+    2: 'C',
+    3: 'D'
+}
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Demo")
     parser.add_argument("--cfg-path", default='eval_configs/minigptv2_eval.yaml',
@@ -127,11 +135,17 @@ def convert_bb(boxes):
     height = boxes['height']
     box_list = boxes['boxes']
 
-    new_boxes = []
+    new_boxes, new_box_dicts = [], []
     for box in box_list:
-        new_box = "{<"+str(round(box[0]/width*100)) +"><"+str(round(box[1]/height*100))+"><"+str(round(box[2]/width*100))+"><"+str(round(box[3]/height*100))+">}"
+        left = str(round(box[0]/width*100))
+        top = str(round(box[1]/height*100))
+        right = str(round(box[2]/width*100))
+        bottom = str(round(box[3]/height*100))
+        d = {"x1": box[0], "x2": box[2], "y1":box[1], "y2":box[3]}
+        new_box_dicts.append(d)
+        new_box = "{<"+ left +"><"+top+"><"+right+"><"+bottom+">}"
         new_boxes.append(new_box)
-    return new_boxes
+    return new_boxes, new_box_dicts
 
 
 def replace_q_bboxes(q, boxes):
@@ -158,8 +172,9 @@ with open(annots+'val.jsonl') as f:
 print(data[0])
 
 final_list = []
-
-for annot in tqdm(data[:2]):
+accuracy = 0
+completed = 0
+for annot in tqdm(data[:1000]):
     ans_dict = {}
     ans_dict['gt_question'] =  " ".join([str(s) for s in annot['question']])
 
@@ -177,8 +192,12 @@ for annot in tqdm(data[:2]):
     # print(annot['objects'])
     # print(boxes['width'], boxes['height'])
     # print(boxes['boxes'])
-    new_boxes = convert_bb(boxes)
-    question, box_list = replace_q_bboxes(annot['question'], convert_bb(boxes))
+    new_boxes, dict_boxes = convert_bb(boxes)
+    question, box_list = replace_q_bboxes(annot['question'], new_boxes)
+
+    options = []
+    for answer in annot['answer_choices']:
+        options.append(replace_q_bboxes(answer, new_boxes)[0])
     
     chat_state = CONV_VISION.copy()
     img_list = []
@@ -196,26 +215,55 @@ for annot in tqdm(data[:2]):
                                 max_new_tokens=100,
                                 max_length=500)
     
-    
-    #question = '[identify] [vqa] '+question
+    question = question + "\nChoose one of the following options: "
+    for iz, option in enumerate(options):
+        question += ' \n '+ans_options[iz]+' '+option
+    question += '\n Answer: '
     chat.ask(question, chat_state)
     output_text, _ = chat.answer(conv=chat_state,
                             img_list=img_list,
                             temperature=temperature,
-                            max_new_tokens=100,
-                            max_length=500)
+                            max_new_tokens=2,
+                            max_length=2000)
 
-    print(chat_state, output_text)
+    # print(chat_state, output_text)
 
+
+    if output_text == 'A':
+        predicted_label = 0
+    elif output_text == 'B':
+        predicted_label = 1
+    elif output_text == 'C':
+        predicted_label = 2
+    elif output_text == 'D':
+        predicted_label = 3
+
+    if predicted_label == annot['answer_label']:
+        accuracy += 1
+
+    completed += 1
     ans_dict['img_id'] = annot['img_id']
     ans_dict['annot_id'] = annot['annot_id']
     ans_dict['image_url'] = image_url
-    ans_dict['new_boxes'] = new_boxes
+    ans_dict['new_boxes'] = dict_boxes
+    ans_dict['annotations'] = new_boxes
     ans_dict['objects'] = annot['objects']
     ans_dict['new_question'] = question
-    ans_dict['new_answer'] = output_text
+    ans_dict['predicted_label'] = predicted_label
     ans_dict['GT_answer'] = annot['answer_orig']
+    ans_dict['answer_label'] = annot['answer_label']
+    ans_dict['chat_state'] = str(chat_state)
+    # ans_dict['original_boxes'] = str(boxes)
     final_list.append(ans_dict)
+
+
+
+final_acc = 0
+for entry in final_list:
+    if entry['predicted_label'] == entry['answer_label']:
+        final_acc += 1
+
+print('Final Accuracy: ', final_acc/len(final_list))
 
 with open('val_new.json', 'w') as f:
     json.dump(final_list, f, indent=4)
