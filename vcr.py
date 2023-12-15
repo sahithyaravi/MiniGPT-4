@@ -174,7 +174,7 @@ print(data[0])
 final_list = []
 accuracy = 0
 completed = 0
-for annot in tqdm(data[:1000]):
+for annot in tqdm(data[:20]):
     ans_dict = {}
     ans_dict['gt_question'] =  " ".join([str(s) for s in annot['question']])
 
@@ -215,18 +215,25 @@ for annot in tqdm(data[:1000]):
                                 max_new_tokens=100,
                                 max_length=500)
     
-    question = question + "\nChoose one of the following options: "
+
+    question_with_options = f"""
+Read the question and provided answer options carefully and choose the best among (A, B, C or D): 
+Question: {question}
+Options:
+"""
     for iz, option in enumerate(options):
-        question += ' \n '+ans_options[iz]+' '+option
-    question += '\n Answer: '
-    chat.ask(question, chat_state)
+        question_with_options += f"""{ans_options[iz]}) {option}
+"""
+    question_with_options += """Answer: """
+    print(question_with_options)
+    chat.ask(question_with_options, chat_state)
     output_text, _ = chat.answer(conv=chat_state,
                             img_list=img_list,
                             temperature=temperature,
                             max_new_tokens=2,
                             max_length=2000)
 
-    # print(chat_state, output_text)
+    output_text = output_text.strip()
 
 
     if output_text == 'A':
